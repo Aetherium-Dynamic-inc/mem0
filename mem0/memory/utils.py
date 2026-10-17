@@ -11,6 +11,59 @@ from mem0.configs.prompts import (
 
 logger = logging.getLogger(__name__)
 
+# Pre-compiled regular expressions for string utility functions
+_CODE_BLOCK_PATTERN = re.compile(r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$")
+_THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", re.DOTALL)
+_EXTRACT_JSON_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+
+_CYPHER_CHAR_MAP = {
+    "...": "_ellipsis_",
+    "…": "_ellipsis_",
+    "。": "_period_",
+    "，": "_comma_",
+    "；": "_semicolon_",
+    "：": "_colon_",
+    "！": "_exclamation_",
+    "？": "_question_",
+    "（": "_lparen_",
+    "）": "_rparen_",
+    "【": "_lbracket_",
+    "】": "_rbracket_",
+    "《": "_langle_",
+    "》": "_rangle_",
+    "'": "_apostrophe_",
+    '"': "_quote_",
+    "\\": "_backslash_",
+    "/": "_slash_",
+    "|": "_pipe_",
+    "&": "_ampersand_",
+    "=": "_equals_",
+    "+": "_plus_",
+    "*": "_asterisk_",
+    "^": "_caret_",
+    "%": "_percent_",
+    "$": "_dollar_",
+    "#": "_hash_",
+    "@": "_at_",
+    "!": "_bang_",
+    "?": "_question_",
+    "(": "_lparen_",
+    ")": "_rparen_",
+    "[": "_lbracket_",
+    "]": "_rbracket_",
+    "{": "_lbrace_",
+    "}": "_rbrace_",
+    "<": "_langle_",
+    ">": "_rangle_",
+    "-": "_",
+}
+
+# Pre-compile combined regex pattern sorted by length descending so multi-char tokens match first
+_CYPHER_REPLACE_PATTERN = re.compile(
+    "|".join(re.escape(k) for k in sorted(_CYPHER_CHAR_MAP.keys(), key=len, reverse=True))
+)
+_NORMALIZE_UNDERSCORES = re.compile(r"_+")
+
 
 def get_fact_retrieval_messages(message, is_agent_memory=False):
     """Get fact retrieval messages based on the memory type.
@@ -131,11 +184,9 @@ def remove_code_blocks(content: str) -> str:
         content = "".join(parts)
     if not isinstance(content, str):
         return ""
-    pattern = r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$"
-    match = re.match(pattern, content.strip())
-    match_res=match.group(1).strip() if match else content.strip()
-    return re.sub(r"<think>.*?</think>", "", match_res, flags=re.DOTALL).strip()
-
+    match = _CODE_BLOCK_PATTERN.match(content.strip())
+    match_res = match.group(1).strip() if match else content.strip()
+    return _THINK_TAG_PATTERN.sub("", match_res).strip()
 
 
 def extract_json(text):
@@ -145,7 +196,7 @@ def extract_json(text):
     If that also fails, returns the text as-is.
     """
     text = text.strip()
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    match = _EXTRACT_JSON_PATTERN.search(text)
     if match:
         json_str = match.group(1)
     else:
@@ -252,54 +303,16 @@ def process_telemetry_filters(filters):
 
 def sanitize_relationship_for_cypher(relationship) -> str:
     """Sanitize relationship text for Cypher queries by replacing problematic characters."""
-    char_map = {
-        "...": "_ellipsis_",
-        "…": "_ellipsis_",
-        "。": "_period_",
-        "，": "_comma_",
-        "；": "_semicolon_",
-        "：": "_colon_",
-        "！": "_exclamation_",
-        "？": "_question_",
-        "（": "_lparen_",
-        "）": "_rparen_",
-        "【": "_lbracket_",
-        "】": "_rbracket_",
-        "《": "_langle_",
-        "》": "_rangle_",
-        "'": "_apostrophe_",
-        '"': "_quote_",
-        "\\": "_backslash_",
-        "/": "_slash_",
-        "|": "_pipe_",
-        "&": "_ampersand_",
-        "=": "_equals_",
-        "+": "_plus_",
-        "*": "_asterisk_",
-        "^": "_caret_",
-        "%": "_percent_",
-        "$": "_dollar_",
-        "#": "_hash_",
-        "@": "_at_",
-        "!": "_bang_",
-        "?": "_question_",
-        "(": "_lparen_",
-        ")": "_rparen_",
-        "[": "_lbracket_",
-        "]": "_rbracket_",
-        "{": "_lbrace_",
-        "}": "_rbrace_",
-        "<": "_langle_",
-        ">": "_rangle_",
-        "-": "_",
-    }
+    # Fast-path: Skip replacement and sub operations if no special mapped characters are present
+    if not _CYPHER_REPLACE_PATTERN.search(relationship):
+        if "__" in relationship:
+            relationship = _NORMALIZE_UNDERSCORES.sub("_", relationship)
+        return relationship.strip("_")
 
-    # Apply replacements and clean up
-    sanitized = relationship
-    for old, new in char_map.items():
-        sanitized = sanitized.replace(old, new)
-
-    return re.sub(r"_+", "_", sanitized).strip("_")
+    sanitized = _CYPHER_REPLACE_PATTERN.sub(lambda m: _CYPHER_CHAR_MAP[m.group(0)], relationship)
+    if "__" in sanitized:
+        sanitized = _NORMALIZE_UNDERSCORES.sub("_", sanitized)
+    return sanitized.strip("_")
 
 
 def remove_spaces_from_entities(
