@@ -11,6 +11,12 @@ from mem0.configs.prompts import (
 
 logger = logging.getLogger(__name__)
 
+# Pre-compiled regular expressions for performance on hot paths
+_CODE_BLOCK_RE = re.compile(r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$")
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
+_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", flags=re.DOTALL)
+_MULTI_UNDERSCORE_RE = re.compile(r"_+")
+
 
 def get_fact_retrieval_messages(message, is_agent_memory=False):
     """Get fact retrieval messages based on the memory type.
@@ -131,11 +137,12 @@ def remove_code_blocks(content: str) -> str:
         content = "".join(parts)
     if not isinstance(content, str):
         return ""
-    pattern = r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$"
-    match = re.match(pattern, content.strip())
-    match_res=match.group(1).strip() if match else content.strip()
-    return re.sub(r"<think>.*?</think>", "", match_res, flags=re.DOTALL).strip()
-
+    stripped = content.strip()
+    match = _CODE_BLOCK_RE.match(stripped)
+    match_res = match.group(1).strip() if match else stripped
+    if "<think>" in match_res:
+        match_res = _THINK_TAG_RE.sub("", match_res).strip()
+    return match_res
 
 
 def extract_json(text):
@@ -145,7 +152,7 @@ def extract_json(text):
     If that also fails, returns the text as-is.
     """
     text = text.strip()
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    match = _JSON_BLOCK_RE.search(text)
     if match:
         json_str = match.group(1)
     else:
@@ -299,7 +306,7 @@ def sanitize_relationship_for_cypher(relationship) -> str:
     for old, new in char_map.items():
         sanitized = sanitized.replace(old, new)
 
-    return re.sub(r"_+", "_", sanitized).strip("_")
+    return _MULTI_UNDERSCORE_RE.sub("_", sanitized).strip("_")
 
 
 def remove_spaces_from_entities(
