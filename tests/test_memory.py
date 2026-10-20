@@ -1665,3 +1665,27 @@ def test_sync_procedural_memory_empty_content_raises(
         )
 
     mock_vector_store.insert.assert_not_called()
+
+
+def test_payload_is_expired_optimization():
+    from datetime import date
+    from mem0.memory.main import _payload_is_expired
+
+    today = date(2025, 5, 20)
+
+    # Empty payload or missing expiration_date
+    assert not _payload_is_expired(None, today)
+    assert not _payload_is_expired({}, today)
+    assert not _payload_is_expired({"data": "hello"}, today)
+
+    # Past expiration date (expired)
+    assert _payload_is_expired({"expiration_date": "2025-05-19"}, today)
+    assert _payload_is_expired({"expiration_date": date(2025, 5, 19)}, today)
+
+    # Future/today expiration date (not expired)
+    assert not _payload_is_expired({"expiration_date": "2025-05-20"}, today)
+    assert not _payload_is_expired({"expiration_date": "2025-05-21"}, today)
+    assert not _payload_is_expired({"expiration_date": date(2025, 5, 21)}, today)
+
+    # Invalid expiration date string
+    assert not _payload_is_expired({"expiration_date": "invalid-date"}, today)
