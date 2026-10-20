@@ -439,14 +439,26 @@ def _normalize_expiration_date(value: Any) -> Optional[str]:
     raise ValueError("expiration_date must be a date string in YYYY-MM-DD format.")
 
 
-def _payload_is_expired(payload: Optional[Dict[str, Any]]) -> bool:
+def _payload_is_expired(payload: Optional[Dict[str, Any]], current_date: Optional[date] = None) -> bool:
+    """Check if a memory payload has expired.
+
+    Performance optimization: Accepts precomputed `current_date` to avoid repeated
+    datetime.now(timezone.utc).date() allocations during bulk memory filtering.
+    """
     if not payload:
         return False
     expiration_date = payload.get("expiration_date")
     if not expiration_date:
         return False
     try:
-        return date.fromisoformat(str(expiration_date)) < datetime.now(timezone.utc).date()
+        target_date = current_date if current_date is not None else datetime.now(timezone.utc).date()
+        if isinstance(expiration_date, date):
+            exp_date = expiration_date
+        elif isinstance(expiration_date, str):
+            exp_date = date.fromisoformat(expiration_date)
+        else:
+            exp_date = date.fromisoformat(str(expiration_date))
+        return exp_date < target_date
     except ValueError:
         return False
 
@@ -1365,8 +1377,9 @@ class Memory(MemoryBase):
         core_and_promoted_keys = {"data", "hash", "created_at", "updated_at", "id", "text_lemmatized", "attributed_to", *promoted_payload_keys}
 
         formatted_memories = []
+        current_date = datetime.now(timezone.utc).date() if not show_expired else None
         for mem in actual_memories:
-            if not show_expired and _payload_is_expired(mem.payload):
+            if not show_expired and _payload_is_expired(mem.payload, current_date):
                 continue
             memory_item_dict = MemoryItem(
                 id=mem.id,
@@ -1679,9 +1692,10 @@ class Memory(MemoryBase):
 
         # Step 7: Build candidate set from semantic results
         candidates = []
+        current_date = datetime.now(timezone.utc).date() if not show_expired else None
         for mem in semantic_results:
             payload = mem.payload if hasattr(mem, 'payload') else {}
-            if not show_expired and _payload_is_expired(payload):
+            if not show_expired and _payload_is_expired(payload, current_date):
                 continue
             mem_id = str(mem.id)
             candidates.append({
@@ -3046,8 +3060,9 @@ class AsyncMemory(MemoryBase):
         core_and_promoted_keys = {"data", "hash", "created_at", "updated_at", "id", "text_lemmatized", "attributed_to", *promoted_payload_keys}
 
         formatted_memories = []
+        current_date = datetime.now(timezone.utc).date() if not show_expired else None
         for mem in actual_memories:
-            if not show_expired and _payload_is_expired(mem.payload):
+            if not show_expired and _payload_is_expired(mem.payload, current_date):
                 continue
             memory_item_dict = MemoryItem(
                 id=mem.id,
@@ -3366,9 +3381,10 @@ class AsyncMemory(MemoryBase):
 
         # Step 7: Build candidate set from semantic results
         candidates = []
+        current_date = datetime.now(timezone.utc).date() if not show_expired else None
         for mem in semantic_results:
             payload = mem.payload if hasattr(mem, 'payload') else {}
-            if not show_expired and _payload_is_expired(payload):
+            if not show_expired and _payload_is_expired(payload, current_date):
                 continue
             mem_id = str(mem.id)
             candidates.append({
