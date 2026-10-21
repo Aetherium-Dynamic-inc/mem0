@@ -1,0 +1,3 @@
+## 2025-05-18 - `heapq.nlargest` vs `list.sort()` in Python scoring loops
+**Learning:** In `score_and_rank` for N=60-1000 items, using `heapq.nlargest` was slower than standard list `.sort(key=...)[:top_k]`. Python's C-implemented Timsort (`list.sort`) runs entirely in C, whereas `heapq.nlargest` invokes Python-level comparison key functions and tuple packing for each candidate, creating more overhead unless N is significantly larger.
+**Action:** Prefer `list.sort(key=..., reverse=True)[:top_k]` over `heapq.nlargest` for candidate lists under ~10,000 items in Python performance-critical paths.
