@@ -11,14 +11,63 @@ from mem0.configs.prompts import (
 
 logger = logging.getLogger(__name__)
 
+# Pre-compiled regex patterns for high-frequency string operations
+CODE_BLOCK_PATTERN = re.compile(r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$")
+THINK_PATTERN = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
+EXTRACT_JSON_CODE_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+MULTIPLE_UNDERSCORES_RE = re.compile(r"_+")
+
+# Pre-allocated character replacement map for Cypher relationship sanitization
+CYPHER_RELATIONSHIP_CHAR_MAP = {
+    "...": "_ellipsis_",
+    "…": "_ellipsis_",
+    "。": "_period_",
+    "，": "_comma_",
+    "；": "_semicolon_",
+    "：": "_colon_",
+    "！": "_exclamation_",
+    "？": "_question_",
+    "（": "_lparen_",
+    "）": "_rparen_",
+    "【": "_lbracket_",
+    "】": "_rbracket_",
+    "《": "_langle_",
+    "》": "_rangle_",
+    "'": "_apostrophe_",
+    '"': "_quote_",
+    "\\": "_backslash_",
+    "/": "_slash_",
+    "|": "_pipe_",
+    "&": "_ampersand_",
+    "=": "_equals_",
+    "+": "_plus_",
+    "*": "_asterisk_",
+    "^": "_caret_",
+    "%": "_percent_",
+    "$": "_dollar_",
+    "#": "_hash_",
+    "@": "_at_",
+    "!": "_bang_",
+    "?": "_question_",
+    "(": "_lparen_",
+    ")": "_rparen_",
+    "[": "_lbracket_",
+    "]": "_rbracket_",
+    "{": "_lbrace_",
+    "}": "_rbrace_",
+    "<": "_langle_",
+    ">": "_rangle_",
+    "-": "_",
+}
+
 
 def get_fact_retrieval_messages(message, is_agent_memory=False):
     """Get fact retrieval messages based on the memory type.
-    
+
     Args:
         message: The message content to extract facts from
         is_agent_memory: If True, use agent memory extraction prompt, else use user memory extraction prompt
-        
+
     Returns:
         tuple: (system_prompt, user_prompt)
     """
@@ -52,14 +101,13 @@ def ensure_json_instruction(system_prompt, user_prompt):
     combined = (system_prompt + user_prompt).lower()
     if "json" not in combined:
         system_prompt += (
-            "\n\nYou must return your response in valid JSON format "
-            "with a 'facts' key containing an array of strings."
+            "\n\nYou must return your response in valid JSON format with a 'facts' key containing an array of strings."
         )
     return system_prompt, user_prompt
 
 
 def parse_messages(messages):
-    response = ""
+    parts = []
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content")
@@ -67,13 +115,9 @@ def parse_messages(messages):
         # messages that carry `tool_calls` but no `content` key).
         if content is None:
             continue
-        if role == "system":
-            response += f"system: {content}\n"
-        elif role == "user":
-            response += f"user: {content}\n"
-        elif role == "assistant":
-            response += f"assistant: {content}\n"
-    return response
+        if role in ("system", "user", "assistant"):
+            parts.append(f"{role}: {content}\n")
+    return "".join(parts)
 
 
 def format_entities(entities):
@@ -86,6 +130,7 @@ def format_entities(entities):
         formatted_lines.append(simplified)
 
     return "\n".join(formatted_lines)
+
 
 def normalize_facts(raw_facts):
     """Normalize LLM-extracted facts to a list of strings.
@@ -117,7 +162,7 @@ def remove_code_blocks(content: str) -> str:
     Removes enclosing code block markers ```[language] and ``` from a given string.
 
     Remarks:
-    - The function uses a regex pattern to match code blocks that may start with ``` followed by an optional language tag (letters or numbers) and end with ```.
+    - Uses pre-compiled regex patterns (CODE_BLOCK_PATTERN, THINK_PATTERN) to avoid re-compilation overhead on every call.
     - If a code block is detected, it returns only the inner content, stripping out the markers.
     - If no code block markers are found, the original content is returned as-is.
     """
@@ -131,11 +176,10 @@ def remove_code_blocks(content: str) -> str:
         content = "".join(parts)
     if not isinstance(content, str):
         return ""
-    pattern = r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$"
-    match = re.match(pattern, content.strip())
-    match_res=match.group(1).strip() if match else content.strip()
-    return re.sub(r"<think>.*?</think>", "", match_res, flags=re.DOTALL).strip()
-
+    stripped = content.strip()
+    match = CODE_BLOCK_PATTERN.match(stripped)
+    match_res = match.group(1).strip() if match else stripped
+    return THINK_PATTERN.sub("", match_res).strip()
 
 
 def extract_json(text):
@@ -145,7 +189,7 @@ def extract_json(text):
     If that also fails, returns the text as-is.
     """
     text = text.strip()
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    match = EXTRACT_JSON_CODE_BLOCK_PATTERN.search(text)
     if match:
         json_str = match.group(1)
     else:
@@ -204,8 +248,7 @@ def parse_vision_messages(messages, llm=None, vision_details="auto"):
         if isinstance(content, list):
             if llm is None:
                 text_parts = [
-                    part["text"] for part in msg["content"]
-                    if isinstance(part, dict) and part.get("type") == "text"
+                    part["text"] for part in msg["content"] if isinstance(part, dict) and part.get("type") == "text"
                 ]
                 if not text_parts:
                     continue
@@ -251,55 +294,16 @@ def process_telemetry_filters(filters):
 
 
 def sanitize_relationship_for_cypher(relationship) -> str:
-    """Sanitize relationship text for Cypher queries by replacing problematic characters."""
-    char_map = {
-        "...": "_ellipsis_",
-        "…": "_ellipsis_",
-        "。": "_period_",
-        "，": "_comma_",
-        "；": "_semicolon_",
-        "：": "_colon_",
-        "！": "_exclamation_",
-        "？": "_question_",
-        "（": "_lparen_",
-        "）": "_rparen_",
-        "【": "_lbracket_",
-        "】": "_rbracket_",
-        "《": "_langle_",
-        "》": "_rangle_",
-        "'": "_apostrophe_",
-        '"': "_quote_",
-        "\\": "_backslash_",
-        "/": "_slash_",
-        "|": "_pipe_",
-        "&": "_ampersand_",
-        "=": "_equals_",
-        "+": "_plus_",
-        "*": "_asterisk_",
-        "^": "_caret_",
-        "%": "_percent_",
-        "$": "_dollar_",
-        "#": "_hash_",
-        "@": "_at_",
-        "!": "_bang_",
-        "?": "_question_",
-        "(": "_lparen_",
-        ")": "_rparen_",
-        "[": "_lbracket_",
-        "]": "_rbracket_",
-        "{": "_lbrace_",
-        "}": "_rbrace_",
-        "<": "_langle_",
-        ">": "_rangle_",
-        "-": "_",
-    }
+    """Sanitize relationship text for Cypher queries by replacing problematic characters.
 
-    # Apply replacements and clean up
+    Performance note: uses module-level pre-allocated CYPHER_RELATIONSHIP_CHAR_MAP
+    and MULTIPLE_UNDERSCORES_RE regex to avoid allocation overhead on every invocation.
+    """
     sanitized = relationship
-    for old, new in char_map.items():
+    for old, new in CYPHER_RELATIONSHIP_CHAR_MAP.items():
         sanitized = sanitized.replace(old, new)
 
-    return re.sub(r"_+", "_", sanitized).strip("_")
+    return MULTIPLE_UNDERSCORES_RE.sub("_", sanitized).strip("_")
 
 
 def remove_spaces_from_entities(
@@ -327,4 +331,3 @@ def remove_spaces_from_entities(
         item["destination"] = item["destination"].lower().replace(" ", "_")
         cleaned.append(item)
     return cleaned
-
