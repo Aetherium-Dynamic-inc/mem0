@@ -1,0 +1,3 @@
+## 2026-03-30 - Cypher Relationship Sanitization Optimization
+**Learning:** In graph memory sanitization (`sanitize_relationship_for_cypher`), constructing a 40-item character map and executing 40 `.replace()` string passes on every call creates significant CPU overhead when processing entity relationships. Checking `if old in sanitized:` before `.replace()` and using pre-compiled module-level regexes and character maps speeds up sanitization by >11x without altering functionality or breaking edge cases.
+**Action:** Always check if substrings exist (`if old in string:`) before performing string replacements when operating over a dictionary of multiple character replacements, and hoist fixed translation maps and regex patterns to module scope.

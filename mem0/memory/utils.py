@@ -11,6 +11,55 @@ from mem0.configs.prompts import (
 
 logger = logging.getLogger(__name__)
 
+# Pre-compiled module-level constants and regular expressions for performance optimization.
+# Avoid re-instantiating dictionaries and re-compiling regex patterns during LLM response parsing and graph operations.
+CODE_BLOCK_PATTERN = re.compile(r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$")
+THINK_TAG_PATTERN = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
+JSON_CODE_BLOCK_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+MULTIPLE_UNDERSCORES_PATTERN = re.compile(r"_+")
+
+CYPHER_CHAR_MAP = {
+    "...": "_ellipsis_",
+    "…": "_ellipsis_",
+    "。": "_period_",
+    "，": "_comma_",
+    "；": "_semicolon_",
+    "：": "_colon_",
+    "！": "_exclamation_",
+    "？": "_question_",
+    "（": "_lparen_",
+    "）": "_rparen_",
+    "【": "_lbracket_",
+    "】": "_rbracket_",
+    "《": "_langle_",
+    "》": "_rangle_",
+    "'": "_apostrophe_",
+    '"': "_quote_",
+    "\\": "_backslash_",
+    "/": "_slash_",
+    "|": "_pipe_",
+    "&": "_ampersand_",
+    "=": "_equals_",
+    "+": "_plus_",
+    "*": "_asterisk_",
+    "^": "_caret_",
+    "%": "_percent_",
+    "$": "_dollar_",
+    "#": "_hash_",
+    "@": "_at_",
+    "!": "_bang_",
+    "?": "_question_",
+    "(": "_lparen_",
+    ")": "_rparen_",
+    "[": "_lbracket_",
+    "]": "_rbracket_",
+    "{": "_lbrace_",
+    "}": "_rbrace_",
+    "<": "_langle_",
+    ">": "_rangle_",
+    "-": "_",
+}
+
 
 def get_fact_retrieval_messages(message, is_agent_memory=False):
     """Get fact retrieval messages based on the memory type.
@@ -131,11 +180,9 @@ def remove_code_blocks(content: str) -> str:
         content = "".join(parts)
     if not isinstance(content, str):
         return ""
-    pattern = r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$"
-    match = re.match(pattern, content.strip())
-    match_res=match.group(1).strip() if match else content.strip()
-    return re.sub(r"<think>.*?</think>", "", match_res, flags=re.DOTALL).strip()
-
+    match = CODE_BLOCK_PATTERN.match(content.strip())
+    match_res = match.group(1).strip() if match else content.strip()
+    return THINK_TAG_PATTERN.sub("", match_res).strip()
 
 
 def extract_json(text):
@@ -145,7 +192,7 @@ def extract_json(text):
     If that also fails, returns the text as-is.
     """
     text = text.strip()
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    match = JSON_CODE_BLOCK_PATTERN.search(text)
     if match:
         json_str = match.group(1)
     else:
@@ -252,54 +299,18 @@ def process_telemetry_filters(filters):
 
 def sanitize_relationship_for_cypher(relationship) -> str:
     """Sanitize relationship text for Cypher queries by replacing problematic characters."""
-    char_map = {
-        "...": "_ellipsis_",
-        "…": "_ellipsis_",
-        "。": "_period_",
-        "，": "_comma_",
-        "；": "_semicolon_",
-        "：": "_colon_",
-        "！": "_exclamation_",
-        "？": "_question_",
-        "（": "_lparen_",
-        "）": "_rparen_",
-        "【": "_lbracket_",
-        "】": "_rbracket_",
-        "《": "_langle_",
-        "》": "_rangle_",
-        "'": "_apostrophe_",
-        '"': "_quote_",
-        "\\": "_backslash_",
-        "/": "_slash_",
-        "|": "_pipe_",
-        "&": "_ampersand_",
-        "=": "_equals_",
-        "+": "_plus_",
-        "*": "_asterisk_",
-        "^": "_caret_",
-        "%": "_percent_",
-        "$": "_dollar_",
-        "#": "_hash_",
-        "@": "_at_",
-        "!": "_bang_",
-        "?": "_question_",
-        "(": "_lparen_",
-        ")": "_rparen_",
-        "[": "_lbracket_",
-        "]": "_rbracket_",
-        "{": "_lbrace_",
-        "}": "_rbrace_",
-        "<": "_langle_",
-        ">": "_rangle_",
-        "-": "_",
-    }
+    if not relationship:
+        return ""
 
-    # Apply replacements and clean up
+    # Optimization: check 'if old in sanitized' before calling .replace()
+    # Most standard relationship strings (e.g., 'WORKS_AT', 'FRIEND_OF') contain none
+    # of the special characters in CYPHER_CHAR_MAP, avoiding 40 full string replacement passes.
     sanitized = relationship
-    for old, new in char_map.items():
-        sanitized = sanitized.replace(old, new)
+    for old, new in CYPHER_CHAR_MAP.items():
+        if old in sanitized:
+            sanitized = sanitized.replace(old, new)
 
-    return re.sub(r"_+", "_", sanitized).strip("_")
+    return MULTIPLE_UNDERSCORES_PATTERN.sub("_", sanitized).strip("_")
 
 
 def remove_spaces_from_entities(
