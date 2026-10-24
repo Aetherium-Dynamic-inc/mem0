@@ -10,6 +10,7 @@ import uuid
 import warnings
 from copy import deepcopy
 from datetime import date, datetime, timezone
+from functools import lru_cache
 from typing import Any, Dict, Optional
 
 from pydantic import ValidationError
@@ -251,8 +252,11 @@ def _validate_and_trim_search_query(query: str) -> str:
     return trimmed
 
 
+@lru_cache(maxsize=256)
 def _is_sensitive_field(field_name: str) -> bool:
     """Check if a field should be redacted for telemetry safety.
+
+    Cached with LRU cache to avoid repeated string normalization and set/suffix checks on recurring config fields.
 
     Uses a layered approach:
     1. Runtime fields (allowlist) — always preserved, highest priority.
