@@ -189,6 +189,28 @@ class TestProcessTelemetryFilters:
         assert process_telemetry_filters(None) == ([], {})
 
 
+class TestSanitizeRelationshipForCypher:
+    def test_clean_identifiers_fast_path(self):
+        assert sanitize_relationship_for_cypher("works_at") == "works_at"
+        assert sanitize_relationship_for_cypher("likes") == "likes"
+        assert sanitize_relationship_for_cypher("friend_of") == "friend_of"
+        assert sanitize_relationship_for_cypher("has_10_cats") == "has_10_cats"
+
+    def test_empty_string_and_none(self):
+        assert sanitize_relationship_for_cypher("") == ""
+        assert sanitize_relationship_for_cypher(None) == ""
+
+    def test_special_characters_and_punctuation(self):
+        assert sanitize_relationship_for_cypher("likes...a_lot") == "likes_ellipsis_a_lot"
+        assert sanitize_relationship_for_cypher("has_a_cat_named_foo!") == "has_a_cat_named_foo_bang"
+        assert sanitize_relationship_for_cypher("is_brother_of_(younger)") == "is_brother_of_lparen_younger_rparen"
+        assert sanitize_relationship_for_cypher("hello_@world") == "hello_at_world"
+
+    def test_multiple_underscores_and_stripping(self):
+        assert sanitize_relationship_for_cypher("__foo__") == "foo"
+        assert sanitize_relationship_for_cypher("a--b") == "a_b"
+
+
 class TestRemoveCodeBlocks:
     def test_none_content_returns_empty_string(self):
         assert remove_code_blocks(None) == ""
