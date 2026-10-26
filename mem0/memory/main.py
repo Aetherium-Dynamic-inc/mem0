@@ -360,10 +360,13 @@ def _build_filters_and_metadata(
     # Identity scope is set below from the entity params only. Stripping the keys here
     # stops caller metadata from placing a memory into a scope the caller did not pass,
     # which the re-pins below cannot prevent for a param that was left unset (issue #6655).
+    # Performance optimization: _strip_identity_keys returns a new dict ('clean') so
+    # deepcopy is unnecessary and input_metadata is preserved intact. Using shallow copy
+    # for effective_query_filters avoids deepcopy overhead while isolating top-level key mutations.
     base_metadata_template = (
-        _strip_identity_keys(deepcopy(input_metadata), {}, context="add()") if input_metadata else {}
+        _strip_identity_keys(input_metadata, {}, context="add()") if input_metadata else {}
     )
-    effective_query_filters = deepcopy(input_filters) if input_filters else {}
+    effective_query_filters = input_filters.copy() if input_filters else {}
 
     # ---------- validate and add all provided session ids ----------
     session_ids_provided = []
