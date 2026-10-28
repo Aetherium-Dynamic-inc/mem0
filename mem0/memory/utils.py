@@ -11,6 +11,11 @@ from mem0.configs.prompts import (
 
 logger = logging.getLogger(__name__)
 
+# Pre-compiled module-level regular expressions for frequent string cleaning
+_CODE_BLOCK_RE = re.compile(r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$")
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
+_EXTRACT_JSON_CODE_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL)
+
 
 def get_fact_retrieval_messages(message, is_agent_memory=False):
     """Get fact retrieval messages based on the memory type.
@@ -59,21 +64,22 @@ def ensure_json_instruction(system_prompt, user_prompt):
 
 
 def parse_messages(messages):
-    response = ""
+    # Performance optimization: collect list parts and join once to avoid O(N^2) string concatenations.
+    parts = []
     for msg in messages:
-        role = msg.get("role")
         content = msg.get("content")
         # Skip messages without textual content (e.g. assistant tool-call
         # messages that carry `tool_calls` but no `content` key).
         if content is None:
             continue
+        role = msg.get("role")
         if role == "system":
-            response += f"system: {content}\n"
+            parts.append(f"system: {content}\n")
         elif role == "user":
-            response += f"user: {content}\n"
+            parts.append(f"user: {content}\n")
         elif role == "assistant":
-            response += f"assistant: {content}\n"
-    return response
+            parts.append(f"assistant: {content}\n")
+    return "".join(parts)
 
 
 def format_entities(entities):
@@ -131,10 +137,19 @@ def remove_code_blocks(content: str) -> str:
         content = "".join(parts)
     if not isinstance(content, str):
         return ""
-    pattern = r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$"
-    match = re.match(pattern, content.strip())
-    match_res=match.group(1).strip() if match else content.strip()
-    return re.sub(r"<think>.*?</think>", "", match_res, flags=re.DOTALL).strip()
+
+    # Performance optimization: pre-compiled regex and fast-path checks for ``` and <think>
+    content_stripped = content.strip()
+    if content_stripped.startswith("```"):
+        match = _CODE_BLOCK_RE.match(content_stripped)
+        match_res = match.group(1).strip() if match else content_stripped
+    else:
+        match_res = content_stripped
+
+    if "<think>" in match_res:
+        match_res = _THINK_TAG_RE.sub("", match_res)
+
+    return match_res.strip()
 
 
 
@@ -145,16 +160,18 @@ def extract_json(text):
     If that also fails, returns the text as-is.
     """
     text = text.strip()
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
-    if match:
-        json_str = match.group(1)
+    # Performance optimization: fast check for backticks before running regex
+    if "`" in text:
+        match = _EXTRACT_JSON_CODE_BLOCK_RE.search(text)
+        if match:
+            return match.group(1)
+
+    start_idx = text.find("{")
+    end_idx = text.rfind("}")
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        json_str = text[start_idx : end_idx + 1]
     else:
-        start_idx = text.find("{")
-        end_idx = text.rfind("}")
-        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            json_str = text[start_idx : end_idx + 1]
-        else:
-            json_str = text
+        json_str = text
     return json_str
 
 
