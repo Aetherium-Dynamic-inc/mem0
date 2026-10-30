@@ -59,7 +59,8 @@ def ensure_json_instruction(system_prompt, user_prompt):
 
 
 def parse_messages(messages):
-    response = ""
+    # Optimize string accumulation using list joining to avoid O(N^2) string allocations
+    parts = []
     for msg in messages:
         role = msg.get("role")
         content = msg.get("content")
@@ -67,13 +68,9 @@ def parse_messages(messages):
         # messages that carry `tool_calls` but no `content` key).
         if content is None:
             continue
-        if role == "system":
-            response += f"system: {content}\n"
-        elif role == "user":
-            response += f"user: {content}\n"
-        elif role == "assistant":
-            response += f"assistant: {content}\n"
-    return response
+        if role in ("system", "user", "assistant"):
+            parts.append(f"{role}: {content}\n")
+    return "".join(parts)
 
 
 def format_entities(entities):
@@ -112,6 +109,12 @@ def normalize_facts(raw_facts):
     return normalized
 
 
+# Pre-compile regexes for code blocks, think tags, and JSON extraction to avoid per-call compilation overhead
+_CODE_BLOCK_RE = re.compile(r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$")
+_THINK_TAG_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
+_JSON_BLOCK_RE = re.compile(r"```(?:json)?\s*(.*?)\s*```", flags=re.DOTALL)
+
+
 def remove_code_blocks(content: str) -> str:
     """
     Removes enclosing code block markers ```[language] and ``` from a given string.
@@ -131,11 +134,10 @@ def remove_code_blocks(content: str) -> str:
         content = "".join(parts)
     if not isinstance(content, str):
         return ""
-    pattern = r"^```[a-zA-Z0-9]*\n([\s\S]*?)\n```$"
-    match = re.match(pattern, content.strip())
-    match_res=match.group(1).strip() if match else content.strip()
-    return re.sub(r"<think>.*?</think>", "", match_res, flags=re.DOTALL).strip()
-
+    stripped = content.strip()
+    match = _CODE_BLOCK_RE.match(stripped)
+    match_res = match.group(1).strip() if match else stripped
+    return _THINK_TAG_RE.sub("", match_res).strip()
 
 
 def extract_json(text):
@@ -145,7 +147,7 @@ def extract_json(text):
     If that also fails, returns the text as-is.
     """
     text = text.strip()
-    match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.DOTALL)
+    match = _JSON_BLOCK_RE.search(text)
     if match:
         json_str = match.group(1)
     else:
@@ -250,56 +252,58 @@ def process_telemetry_filters(filters):
     return list(filters.keys()), encoded_ids
 
 
+# Pre-compile relationship sanitization map and regex patterns to avoid 38 sequential .replace() string allocations
+_CYPHER_CHAR_MAP = {
+    "...": "_ellipsis_",
+    "…": "_ellipsis_",
+    "。": "_period_",
+    "，": "_comma_",
+    "；": "_semicolon_",
+    "：": "_colon_",
+    "！": "_exclamation_",
+    "？": "_question_",
+    "（": "_lparen_",
+    "）": "_rparen_",
+    "【": "_lbracket_",
+    "】": "_rbracket_",
+    "《": "_langle_",
+    "》": "_rangle_",
+    "'": "_apostrophe_",
+    '"': "_quote_",
+    "\\": "_backslash_",
+    "/": "_slash_",
+    "|": "_pipe_",
+    "&": "_ampersand_",
+    "=": "_equals_",
+    "+": "_plus_",
+    "*": "_asterisk_",
+    "^": "_caret_",
+    "%": "_percent_",
+    "$": "_dollar_",
+    "#": "_hash_",
+    "@": "_at_",
+    "!": "_bang_",
+    "?": "_question_",
+    "(": "_lparen_",
+    ")": "_rparen_",
+    "[": "_lbracket_",
+    "]": "_rbracket_",
+    "{": "_lbrace_",
+    "}": "_rbrace_",
+    "<": "_langle_",
+    ">": "_rangle_",
+    "-": "_",
+}
+_CYPHER_RELATIONSHIP_RE = re.compile(
+    "|".join(re.escape(k) for k in sorted(_CYPHER_CHAR_MAP.keys(), key=len, reverse=True))
+)
+_MULTIPLE_UNDERSCORES_RE = re.compile(r"_+")
+
+
 def sanitize_relationship_for_cypher(relationship) -> str:
     """Sanitize relationship text for Cypher queries by replacing problematic characters."""
-    char_map = {
-        "...": "_ellipsis_",
-        "…": "_ellipsis_",
-        "。": "_period_",
-        "，": "_comma_",
-        "；": "_semicolon_",
-        "：": "_colon_",
-        "！": "_exclamation_",
-        "？": "_question_",
-        "（": "_lparen_",
-        "）": "_rparen_",
-        "【": "_lbracket_",
-        "】": "_rbracket_",
-        "《": "_langle_",
-        "》": "_rangle_",
-        "'": "_apostrophe_",
-        '"': "_quote_",
-        "\\": "_backslash_",
-        "/": "_slash_",
-        "|": "_pipe_",
-        "&": "_ampersand_",
-        "=": "_equals_",
-        "+": "_plus_",
-        "*": "_asterisk_",
-        "^": "_caret_",
-        "%": "_percent_",
-        "$": "_dollar_",
-        "#": "_hash_",
-        "@": "_at_",
-        "!": "_bang_",
-        "?": "_question_",
-        "(": "_lparen_",
-        ")": "_rparen_",
-        "[": "_lbracket_",
-        "]": "_rbracket_",
-        "{": "_lbrace_",
-        "}": "_rbrace_",
-        "<": "_langle_",
-        ">": "_rangle_",
-        "-": "_",
-    }
-
-    # Apply replacements and clean up
-    sanitized = relationship
-    for old, new in char_map.items():
-        sanitized = sanitized.replace(old, new)
-
-    return re.sub(r"_+", "_", sanitized).strip("_")
+    sanitized = _CYPHER_RELATIONSHIP_RE.sub(lambda m: _CYPHER_CHAR_MAP[m.group(0)], relationship)
+    return _MULTIPLE_UNDERSCORES_RE.sub("_", sanitized).strip("_")
 
 
 def remove_spaces_from_entities(
