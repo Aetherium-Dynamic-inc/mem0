@@ -87,6 +87,28 @@ class TestSQLiteManager:
         }
         assert columns == expected_columns
 
+    def test_database_indexes(self, sqlite_manager):
+        """Test that indexes on history and messages tables exist and cover expected columns."""
+        cursor = sqlite_manager.connection.cursor()
+
+        # Check indexes on history table
+        cursor.execute("PRAGMA index_list(history)")
+        history_indexes = {row[1] for row in cursor.fetchall()}
+        assert "idx_history_memory_id" in history_indexes
+
+        cursor.execute("PRAGMA index_info(idx_history_memory_id)")
+        history_idx_cols = [row[2] for row in cursor.fetchall()]
+        assert history_idx_cols == ["memory_id"]
+
+        # Check indexes on messages table
+        cursor.execute("PRAGMA index_list(messages)")
+        messages_indexes = {row[1] for row in cursor.fetchall()}
+        assert "idx_messages_session_scope" in messages_indexes
+
+        cursor.execute("PRAGMA index_info(idx_messages_session_scope)")
+        messages_idx_cols = [row[2] for row in cursor.fetchall()]
+        assert messages_idx_cols == ["session_scope", "created_at"]
+
     # ========== Add History Tests ==========
 
     def test_add_history_basic(self, sqlite_manager, sample_data):
@@ -198,7 +220,7 @@ class TestSQLiteManager:
             sqlite_manager.add_history(
                 memory_id=sample_data["memory_id"],
                 old_memory=f"Memory {i}",
-                new_memory=f"Memory {i+1}",
+                new_memory=f"Memory {i + 1}",
                 event="ADD" if i == 0 else "UPDATE",
                 created_at=ts,
                 updated_at=ts if i > 0 else None,

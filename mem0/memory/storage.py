@@ -119,6 +119,13 @@ class SQLiteManager:
                     )
                 """
                 )
+                # Performance optimization: Index history by memory_id to avoid full-table scans
+                # during history lookups (get_history).
+                self.connection.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_history_memory_id ON history (memory_id)
+                """
+                )
                 self.connection.execute("COMMIT")
             except Exception as e:
                 self.connection.execute("ROLLBACK")
@@ -139,6 +146,13 @@ class SQLiteManager:
                         name TEXT,
                         created_at DATETIME
                     )
+                """
+                )
+                # Performance optimization: Composite index on (session_scope, created_at DESC)
+                # avoids table scans and temp b-trees during get_last_messages and save_messages eviction.
+                self.connection.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_messages_session_scope ON messages (session_scope, created_at DESC)
                 """
                 )
                 self.connection.execute("COMMIT")
