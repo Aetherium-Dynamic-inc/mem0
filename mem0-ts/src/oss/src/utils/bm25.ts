@@ -6,6 +6,9 @@ export class BM25 {
   private docFreq: Map<string, number>;
   private docLengths: number[];
   private idf: Map<string, number>;
+  // Optimization: Pre-compute term frequencies per document to replace O(L) doc.filter(...)
+  // with O(1) hash map lookups during search scoring.
+  private docTermFreqs: Map<string, number>[];
 
   constructor(documents: string[][], k1 = 1.5, b = 0.75) {
     this.documents = documents;
@@ -13,19 +16,32 @@ export class BM25 {
     this.b = b;
     this.docLengths = documents.map((doc) => doc.length);
     this.avgDocLength =
-      this.docLengths.reduce((a, b) => a + b, 0) / documents.length;
+      this.docLengths.reduce((a, b) => a + b, 0) / (documents.length || 1);
     this.docFreq = new Map();
     this.idf = new Map();
-    this.computeIdf();
+    this.docTermFreqs = [];
+    this.computeIdfAndDocTermFreqs();
   }
 
-  private computeIdf() {
+  /**
+   * Pre-computes per-document term frequency maps and corpus-wide document frequency (DF),
+   * then calculates the Inverse Document Frequency (IDF) for all unique terms.
+   *
+   * By counting term frequencies once during initialization in O(total_tokens),
+   * scoring per query term drops from O(tokens_in_doc) to O(1).
+   */
+  private computeIdfAndDocTermFreqs() {
     const N = this.documents.length;
 
-    // Count document frequency for each term
+    // Count term frequencies per doc and document frequency for each term
     for (const doc of this.documents) {
-      const terms = new Set(doc);
-      for (const term of terms) {
+      const tfMap = new Map<string, number>();
+      for (const term of doc) {
+        tfMap.set(term, (tfMap.get(term) || 0) + 1);
+      }
+      this.docTermFreqs.push(tfMap);
+
+      for (const term of tfMap.keys()) {
         this.docFreq.set(term, (this.docFreq.get(term) || 0) + 1);
       }
     }
@@ -39,9 +55,15 @@ export class BM25 {
   private score(query: string[], doc: string[], index: number): number {
     let score = 0;
     const docLength = this.docLengths[index];
+    const tfMap = this.docTermFreqs[index];
 
     for (const term of query) {
-      const tf = doc.filter((t) => t === term).length;
+      // O(1) lookup replaces doc.filter((t) => t === term).length
+      const tf = tfMap.get(term) || 0;
+      if (tf === 0) {
+        continue;
+      }
+
       const idf = this.idf.get(term) || 0;
 
       score +=
