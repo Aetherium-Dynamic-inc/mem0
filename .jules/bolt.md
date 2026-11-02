@@ -1,0 +1,3 @@
+## 2026-11-02 - MemoryVectorStore In-Memory Cosine Similarity Bottleneck
+**Learning:** In TypeScript vector search over SQLite blobs, converting Float32Array to standard JavaScript arrays (`Array.from(vector)`) inside candidate loops creates massive heap allocation overhead. In addition, computing the query vector norm inside the pairwise cosine similarity function results in O(N * dim) redundant operations instead of computing it once upfront (O(dim)).
+**Action:** When performing local vector similarity comparisons, precalculate the query norm once and index directly into typed arrays (like `Float32Array`) rather than cloning to native JS arrays.
