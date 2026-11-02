@@ -73,16 +73,25 @@ export class MemoryVectorStore implements VectorStore {
     `);
   }
 
-  private cosineSimilarity(a: number[], b: number[]): number {
+  /**
+   * Optimized cosine similarity between query and candidate vector.
+   * Accepts precomputed query norm and avoids array conversions for speed.
+   */
+  private cosineSimilarity(
+    query: number[],
+    sqrtNormQuery: number,
+    vec: Float32Array | number[],
+  ): number {
     let dotProduct = 0;
-    let normA = 0;
     let normB = 0;
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
+    const len = vec.length;
+    for (let i = 0; i < len; i++) {
+      const qVal = query[i];
+      const bVal = vec[i];
+      dotProduct += qVal * bVal;
+      normB += bVal * bVal;
     }
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+    return dotProduct / (sqrtNormQuery * Math.sqrt(normB));
   }
 
   /**
@@ -363,21 +372,30 @@ export class MemoryVectorStore implements VectorStore {
     const rows = this.db.prepare(`SELECT * FROM vectors`).all() as any[];
     const results: VectorStoreResult[] = [];
 
+    // Precompute query norm once across all candidate comparisons (O(dim) instead of O(N * dim))
+    let normQuerySq = 0;
+    for (let i = 0; i < query.length; i++) {
+      normQuerySq += query[i] * query[i];
+    }
+    const sqrtNormQuery = Math.sqrt(normQuerySq);
+
     for (const row of rows) {
-      const vector = new Float32Array(
-        row.vector.buffer,
-        row.vector.byteOffset,
-        row.vector.byteLength / 4,
-      );
       const payload = this.normalizePayload(JSON.parse(row.payload));
+      // filterVector only inspects payload; pass empty array to avoid allocating 1536-element array per row
       const memoryVector: MemoryVector = {
         id: row.id,
-        vector: Array.from(vector),
+        vector: [],
         payload,
       };
 
       if (this.filterVector(memoryVector, filters)) {
-        const score = this.cosineSimilarity(query, Array.from(vector));
+        // Read directly from the Float32Array buffer view without allocating an intermediate JS array
+        const vector = new Float32Array(
+          row.vector.buffer,
+          row.vector.byteOffset,
+          row.vector.byteLength / 4,
+        );
+        const score = this.cosineSimilarity(query, sqrtNormQuery, vector);
         results.push({
           id: memoryVector.id,
           payload: memoryVector.payload,
