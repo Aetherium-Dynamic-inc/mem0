@@ -8,7 +8,12 @@ TypeError, and the whole suite stayed green because nothing built one.
 import os
 from unittest.mock import patch
 
-from mem0.client.main import _bounded_stack, _client_headers, _client_stack
+from mem0.client.main import (
+    _bounded_stack,
+    _client_headers,
+    _client_stack,
+    _sdk_version,
+)
 
 
 def test_a_client_can_be_constructed():
@@ -61,3 +66,20 @@ def test_an_outer_stack_is_appended_to_not_replaced():
 
     assert stack.startswith("openclaw/2.1.0")
     assert "mem0-python/" in stack
+
+
+def test_sdk_version_is_cached():
+    # Clear cache to establish a known state
+    _sdk_version.cache_clear()
+    initial_info = _sdk_version.cache_info()
+    assert initial_info.hits == 0
+
+    version1 = _sdk_version()
+    assert version1 is not None
+
+    version2 = _sdk_version()
+    assert version2 == version1
+
+    after_info = _sdk_version.cache_info()
+    assert after_info.hits >= 1
+    assert after_info.misses == 1
