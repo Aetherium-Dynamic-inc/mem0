@@ -73,11 +73,30 @@ export class MemoryVectorStore implements VectorStore {
     `);
   }
 
-  private cosineSimilarity(a: number[], b: number[]): number {
+  /**
+   * Optimized cosine similarity between two vectors.
+   * Supports Float32Array or number[] and an optional precomputed query norm
+   * (Math.sqrt(normA)) to avoid redundant O(D) norm calculations across N vector comparisons.
+   */
+  private cosineSimilarity(
+    a: number[] | Float32Array,
+    b: number[] | Float32Array,
+    precomputedNormA?: number,
+  ): number {
     let dotProduct = 0;
-    let normA = 0;
     let normB = 0;
-    for (let i = 0; i < a.length; i++) {
+    const len = a.length;
+
+    if (precomputedNormA !== undefined) {
+      for (let i = 0; i < len; i++) {
+        dotProduct += a[i] * b[i];
+        normB += b[i] * b[i];
+      }
+      return dotProduct / (precomputedNormA * Math.sqrt(normB));
+    }
+
+    let normA = 0;
+    for (let i = 0; i < len; i++) {
       dotProduct += a[i] * b[i];
       normA += a[i] * a[i];
       normB += b[i] * b[i];
@@ -360,27 +379,40 @@ export class MemoryVectorStore implements VectorStore {
       );
     }
 
+    // Performance optimization: Precompute the Euclidean norm of the query vector once
+    // rather than recomputing it for each candidate row (O(D) instead of O(N * D)).
+    let queryNormSq = 0;
+    for (let i = 0; i < query.length; i++) {
+      queryNormSq += query[i] * query[i];
+    }
+    const queryNorm = Math.sqrt(queryNormSq);
+
     const rows = this.db.prepare(`SELECT * FROM vectors`).all() as any[];
     const results: VectorStoreResult[] = [];
 
     for (const row of rows) {
+      // Create a Float32Array view directly over the SQLite BLOB buffer
       const vector = new Float32Array(
         row.vector.buffer,
         row.vector.byteOffset,
         row.vector.byteLength / 4,
       );
       const payload = this.normalizePayload(JSON.parse(row.payload));
-      const memoryVector: MemoryVector = {
-        id: row.id,
-        vector: Array.from(vector),
-        payload,
-      };
 
-      if (this.filterVector(memoryVector, filters)) {
-        const score = this.cosineSimilarity(query, Array.from(vector));
+      // Check filters before computing similarity or allocating memory
+      // We pass an object matching MemoryVector shape using the typed array
+      if (
+        this.filterVector(
+          { id: row.id, vector: vector as any, payload },
+          filters,
+        )
+      ) {
+        // Pass Float32Array and precomputed query norm directly to avoid
+        // allocating new JS arrays via Array.from() for every vector row.
+        const score = this.cosineSimilarity(query, vector, queryNorm);
         results.push({
-          id: memoryVector.id,
-          payload: memoryVector.payload,
+          id: row.id,
+          payload,
           score,
         });
       }
