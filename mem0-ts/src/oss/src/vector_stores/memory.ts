@@ -73,14 +73,39 @@ export class MemoryVectorStore implements VectorStore {
     `);
   }
 
-  private cosineSimilarity(a: number[], b: number[]): number {
+  /**
+   * Computes cosine similarity between two vectors.
+   *
+   * Performance optimization:
+   * Accepts ArrayLike<number> (such as Float32Array) to avoid allocating intermediate
+   * JS arrays for stored vectors via Array.from(). Allows passing precomputed normA
+   * to avoid recomputing Euclidean norm of the query on every vector comparison.
+   */
+  private cosineSimilarity(
+    a: ArrayLike<number>,
+    b: ArrayLike<number>,
+    precomputedNormA?: number,
+  ): number {
     let dotProduct = 0;
-    let normA = 0;
     let normB = 0;
-    for (let i = 0; i < a.length; i++) {
-      dotProduct += a[i] * b[i];
-      normA += a[i] * a[i];
-      normB += b[i] * b[i];
+    let normA = 0;
+    const len = a.length;
+
+    if (precomputedNormA !== undefined) {
+      for (let i = 0; i < len; i++) {
+        const bi = b[i];
+        dotProduct += a[i] * bi;
+        normB += bi * bi;
+      }
+      return dotProduct / (precomputedNormA * Math.sqrt(normB));
+    }
+
+    for (let i = 0; i < len; i++) {
+      const ai = a[i];
+      const bi = b[i];
+      dotProduct += ai * bi;
+      normA += ai * ai;
+      normB += bi * bi;
     }
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
   }
@@ -363,6 +388,13 @@ export class MemoryVectorStore implements VectorStore {
     const rows = this.db.prepare(`SELECT * FROM vectors`).all() as any[];
     const results: VectorStoreResult[] = [];
 
+    // Precompute the query vector's Euclidean norm once to eliminate O(N) redundant calculations
+    let queryNorm = 0;
+    for (let i = 0; i < query.length; i++) {
+      queryNorm += query[i] * query[i];
+    }
+    queryNorm = Math.sqrt(queryNorm);
+
     for (const row of rows) {
       const vector = new Float32Array(
         row.vector.buffer,
@@ -370,14 +402,20 @@ export class MemoryVectorStore implements VectorStore {
         row.vector.byteLength / 4,
       );
       const payload = this.normalizePayload(JSON.parse(row.payload));
+
+      // Fast-path filter check: only convert Float32Array to number[] if filters are present
       const memoryVector: MemoryVector = {
         id: row.id,
-        vector: Array.from(vector),
+        vector:
+          filters && Object.keys(filters).length > 0
+            ? Array.from(vector)
+            : (vector as unknown as number[]),
         payload,
       };
 
       if (this.filterVector(memoryVector, filters)) {
-        const score = this.cosineSimilarity(query, Array.from(vector));
+        // Pass Float32Array directly along with precomputed query norm (zero heap allocations for cosine calc)
+        const score = this.cosineSimilarity(query, vector, queryNorm);
         results.push({
           id: memoryVector.id,
           payload: memoryVector.payload,
